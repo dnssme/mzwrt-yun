@@ -1,11 +1,33 @@
 name: 云源插件自动编译发布
 
+# =============================================================================
+# OpenWrt 版本说明
+# 当前使用: OpenWrt 24.10.0  |  GCC 13.3.0  |  Linux 6.6.x
+#
+# 内核版本一致性说明（重要！）
+# ─────────────────────────────
+# OpenWrt 的软件包分为两类：
+#   1. 用户空间包 (luci-app-*, 服务类)   —— 只需架构相同即可安装
+#   2. 内核模块 (kmod-*)               —— 必须与目标固件内核版本 **完全一致**
+#
+# SDK 在构建时已绑定特定的内核版本。用 SDK 24.10.0 编译出的 kmod-* 包，
+# 只能安装到同样使用 OpenWrt 24.10.0 固件的路由器上。
+# 若固件升级到 24.10.1，kmod 包也必须用 24.10.1 的 SDK 重新编译。
+#
+# 验证方法（在路由器上执行）：
+#   opkg info kernel          # 查看当前固件的内核版本
+#   cat /proc/version         # 查看内核版本字符串
+#
+# 本工作流在每次编译后会自动将内核版本写入 release notes，
+# 使用者务必确认路由器固件版本与 Release 说明中的版本一致。
+# =============================================================================
+
 on:
-  # 手动触发，支持选择架构
+  # 手动触发，支持选择单一架构
   workflow_dispatch:
     inputs:
       target:
-        description: '编译目标架构 (留空则编译所有)'
+        description: '编译目标架构 (留空则编译所有架构)'
         required: false
         default: ''
       release:
@@ -21,7 +43,7 @@ on:
   schedule:
     - cron: '0 2 * * 1'
 
-  # 插件配置更新时自动触发
+  # 插件配置或工作流更新时自动触发
   push:
     branches:
       - main
@@ -32,6 +54,9 @@ on:
       - '.github/workflows/build.yml'
 
 env:
+  # OpenWrt 版本（更新固件版本时同步修改此处）
+  OPENWRT_VER: "24.10.0"
+  SDK_VER: "24.10"
   # 编译输出根目录
   OUTPUT_ROOT: ${{ github.workspace }}/output
 
@@ -50,23 +75,60 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # x86_64 (PC / 虚拟机)
+          # ── x86_64 ─────────────────────────────────────────────────────────
+          # 适用设备: PC / 虚拟机 / x86 软路由 (J1900, N100, i226V 等)
           - name: x86_64
-            target: x86
-            subtarget: 64
-            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
-          # ARMv8 (树莓派 4 / 常见 ARM 路由器)
+          # ── aarch64_generic ────────────────────────────────────────────────
+          # 适用设备: RockChip RK35xx 系列 (NanoPi R5S/R4S/R4SE, FriendlyWRT)
+          - name: aarch64_generic
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/rockchip/armv8/openwrt-sdk-24.10.0-rockchip-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+          # ── aarch64_cortex-a53 ─────────────────────────────────────────────
+          # 适用设备: MediaTek MT7981/MT7986 Filogic (小米 AX3000T, GL-MT6000, BPI-R3, CMCC-RAX3000M)
+          - name: aarch64_cortex-a53
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+          # ── aarch64_cortex-a72 ─────────────────────────────────────────────
+          # 适用设备: Marvell Armada 8040 / 树莓派 4 (bcm2711 同架构)
           - name: aarch64_cortex-a72
-            target: bcm27xx
-            subtarget: bcm2711
-            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/bcm27xx/bcm2711/openwrt-sdk-23.05.3-bcm27xx-bcm2711_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/mvebu/cortexa72/openwrt-sdk-24.10.0-mvebu-cortexa72_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
-          # MT7621 (Redmi AC2100 / 小米路由器)
+          # ── arm_cortex-a7_neon-vfpv4 ───────────────────────────────────────
+          # 适用设备: Qualcomm IPQ40xx (GL-B1300, Linksys EA6350v3, ZTE MF286D)
+          - name: arm_cortex-a7_neon-vfpv4
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ipq40xx/generic/openwrt-sdk-24.10.0-ipq40xx-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
+
+          # ── arm_cortex-a9_vfpv3-d16 ────────────────────────────────────────
+          # 适用设备: Marvell Armada 370/375/385/XP
+          - name: arm_cortex-a9_vfpv3-d16
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/mvebu/cortexa9/openwrt-sdk-24.10.0-mvebu-cortexa9_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
+
+          # ── arm_cortex-a15_neon-vfpv4 ──────────────────────────────────────
+          # 适用设备: Qualcomm IPQ806x (Netgear R7800, TP-Link C2600, Linksys EA8500)
+          - name: arm_cortex-a15_neon-vfpv4
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ipq806x/generic/openwrt-sdk-24.10.0-ipq806x-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
+
+          # ── mips_24kc ──────────────────────────────────────────────────────
+          # 适用设备: Qualcomm/Atheros ath79 (TP-Link WR940N/Archer A7/C7, ASUS RT-AC51U)
+          - name: mips_24kc
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ath79/generic/openwrt-sdk-24.10.0-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+          # ── mipsel_24kc ────────────────────────────────────────────────────
+          # 适用设备: MediaTek MT7621 (小米 AC2100/4A-Gigabit, 新路由 Newifi D2, 斐讯 K2P)
           - name: mipsel_24kc
-            target: ramips
-            subtarget: mt7621
-            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt7621/openwrt-sdk-24.10.0-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+          # ── mipsel_74kc ────────────────────────────────────────────────────
+          # 适用设备: MediaTek MT7620/Ralink RT3883 系列路由器
+          - name: mipsel_74kc
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ramips/rt3883/openwrt-sdk-24.10.0-ramips-rt3883_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+          # ── mipsel_mips32 ──────────────────────────────────────────────────
+          # 适用设备: Broadcom BCM47xx MIPS32 (旧款 Linksys/Netgear/ASUS BCM 路由器)
+          - name: mipsel_mips32
+            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/bcm47xx/generic/openwrt-sdk-24.10.0-bcm47xx-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
     # 如果手动触发且指定了架构，则只编译该架构
     if: >
@@ -92,20 +154,38 @@ jobs:
             xsltproc zstd
 
       # ── 下载并解压 SDK ────────────────────────────────────────────────────
-      - name: 配置 OpenWrt SDK
-        env:
-          SDK_URL: ${{ matrix.sdk_url }}
-          BUILD_DIR: /tmp/openwrt-sdk
+      # 注意: OpenWrt 24.10.x SDK 使用 zstd (.tar.zst) 压缩格式
+      - name: 下载并解压 OpenWrt SDK
         run: |
-          echo "::group::下载 SDK"
-          mkdir -p /tmp/openwrt-sdk
-          wget -q --show-progress -O /tmp/sdk.tar.xz "$SDK_URL"
+          SDK_FILE=$(basename "${{ matrix.sdk_url }}")
+          echo "::group::下载 SDK: $SDK_FILE"
+          wget -q --show-progress -O "/tmp/$SDK_FILE" "${{ matrix.sdk_url }}"
           echo "::endgroup::"
 
-          echo "::group::解压 SDK"
-          tar -xJf /tmp/sdk.tar.xz -C /tmp/openwrt-sdk --strip-components=1
-          rm -f /tmp/sdk.tar.xz
+          echo "::group::解压 SDK (zstd)"
+          mkdir -p /tmp/openwrt-sdk
+          tar --zstd -xf "/tmp/$SDK_FILE" -C /tmp/openwrt-sdk --strip-components=1
+          rm -f "/tmp/$SDK_FILE"
           echo "::endgroup::"
+
+      # ── 读取内核版本 ──────────────────────────────────────────────────────
+      # 内核版本来自 SDK 内置的 include/kernel-version.mk。
+      # 用此 SDK 编译的 kmod-* 包只能安装到与此内核版本完全一致的固件上。
+      - name: 读取内核版本信息
+        id: kernel_ver
+        run: |
+          KERNEL_VER=$(grep -m1 '^LINUX_VERSION:=' /tmp/openwrt-sdk/include/kernel-version.mk \
+            | awk -F':=' '{gsub(/[[:space:]]/, "", $2); print $2}')
+          KERNEL_PATCHVER=$(grep -m1 '^LINUX_KERNEL_HASH-' /tmp/openwrt-sdk/include/kernel-version.mk \
+            | awk -F'HASH-' '{gsub(/[[:space:]]/, "", $2); print $2}' | awk '{print $1}' || echo "unknown")
+          echo "kernel_version=$KERNEL_VER" >> "$GITHUB_OUTPUT"
+          echo "kernel_patchver=$KERNEL_PATCHVER" >> "$GITHUB_OUTPUT"
+          echo "OpenWrt 版本: ${{ env.OPENWRT_VER }}"
+          echo "内核版本: $KERNEL_VER"
+          echo "内核 HASH 版本: $KERNEL_PATCHVER"
+          echo ""
+          echo "⚠️  使用此编译产物的 kmod-* 包时，请确保路由器固件为 OpenWrt ${{ env.OPENWRT_VER }}"
+          echo "   可在路由器上执行: opkg info kernel 来确认固件内核版本"
 
       # ── 克隆插件源码 ──────────────────────────────────────────────────────
       - name: 克隆插件源码
@@ -138,12 +218,11 @@ jobs:
           echo "共克隆 $total 个插件，失败 $failed 个"
 
       # ── 配置 feeds ────────────────────────────────────────────────────────
+      # 将自定义插件目录作为额外 feed 追加到 SDK 默认配置后
       - name: 配置 feeds
         working-directory: /tmp/openwrt-sdk
         run: |
-          cat >> feeds.conf.default <<'EOF'
-          src-link custom /tmp/custom_packages
-          EOF
+          echo "src-link custom /tmp/custom_packages" >> feeds.conf.default
 
           echo "::group::更新 feeds"
           ./scripts/feeds update -a
@@ -157,6 +236,17 @@ jobs:
       - name: 生成编译配置
         working-directory: /tmp/openwrt-sdk
         run: |
+          # 关闭不必要的全局编译选项，提高编译速度
+          cat > .config <<'DOTCONFIG'
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_AUTOREMOVE=n
+          CONFIG_SIGNED_PACKAGES=n
+          CONFIG_LUCI_LANG_zh_Hans=y
+          DOTCONFIG
+
+          # 将 plugins.conf 中的插件设为模块编译
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
             read -r name _ <<< "$line"
@@ -167,13 +257,21 @@ jobs:
           make defconfig
 
       # ── 执行编译 ──────────────────────────────────────────────────────────
-      - name: 编译插件
+      # 优先并行编译；若失败则自动降级为单线程重试（排查具体错误）
+      - name: 编译插件包
         working-directory: /tmp/openwrt-sdk
         run: |
-          echo "::group::并行编译"
-          make package/compile -j$(nproc) V=s 2>&1 | tee /tmp/build.log \
-          || make package/compile -j1 V=s 2>&1 | tee /tmp/build.log
-          echo "::endgroup::"
+          echo "::group::并行编译 ($(nproc) 线程)"
+          if make package/compile -j$(nproc) V=s 2>&1 | tee /tmp/build.log; then
+            echo "::endgroup::"
+            echo "✅ 并行编译成功"
+          else
+            echo "::endgroup::"
+            echo "⚠️ 并行编译失败，降级为单线程重试..."
+            echo "::group::单线程重试"
+            make package/compile -j1 V=s 2>&1 | tee /tmp/build.log
+            echo "::endgroup::"
+          fi
 
       # ── 收集 ipk 包 ───────────────────────────────────────────────────────
       - name: 收集编译产物
@@ -186,7 +284,8 @@ jobs:
           echo "收集 ipk 数量: $count"
           echo "pkg_count=$count" >> "$GITHUB_ENV"
 
-      # ── 生成包索引 ────────────────────────────────────────────────────────
+      # ── 生成 opkg 包索引 ──────────────────────────────────────────────────
+      # 生成 Packages + Packages.gz，使该目录可直接作为 opkg 源使用
       - name: 生成 opkg 包索引
         run: |
           PKG_DIR="${OUTPUT_ROOT}/${{ matrix.name }}/packages"
@@ -204,17 +303,26 @@ jobs:
           echo "包索引生成完成"
 
       # ── 打包云源归档 ──────────────────────────────────────────────────────
+      # 归档命名格式: mzwrt-yun-plugins-<arch>-<openwrt_ver>-<date>-<sha>.tar.gz
+      # 其中 openwrt_ver 即为内核版本基准，方便用户核对固件版本
       - name: 打包云源归档
         id: package
         run: |
-          VERSION="$(date +'%Y%m%d')-$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD 2>/dev/null || echo 'local')"
+          LINUX_VER="${{ steps.kernel_ver.outputs.kernel_version }}"
+          GIT_SHA=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD 2>/dev/null || echo 'local')
+          DATE=$(date +'%Y%m%d')
+          VERSION="${{ env.OPENWRT_VER }}-${DATE}-${GIT_SHA}"
+
           TARBALL="${OUTPUT_ROOT}/mzwrt-yun-plugins-${{ matrix.name }}-${VERSION}.tar.gz"
           tar -czf "$TARBALL" -C "${OUTPUT_ROOT}" "${{ matrix.name }}/"
           sha256sum "$TARBALL" > "${TARBALL}.sha256"
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+          echo "tarball=$TARBALL"         >> "$GITHUB_OUTPUT"
           echo "tarball_name=$(basename "$TARBALL")" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"         >> "$GITHUB_OUTPUT"
+          echo "linux_ver=$LINUX_VER"     >> "$GITHUB_OUTPUT"
           echo "云源包: $(basename "$TARBALL")  大小: $(du -sh "$TARBALL" | cut -f1)"
+          echo "绑定内核版本: $LINUX_VER (仅适用于 OpenWrt ${{ env.OPENWRT_VER }} 固件)"
 
       # ── 上传构建产物 ──────────────────────────────────────────────────────
       - name: 上传构建产物
@@ -242,7 +350,6 @@ jobs:
     name: 发布云源 Release
     needs: build
     runs-on: ubuntu-22.04
-    # 只有在所有编译 job 完成后，且满足发布条件时才运行
     if: >
       always() &&
       needs.build.result != 'cancelled' &&
@@ -270,6 +377,7 @@ jobs:
         id: release_notes
         run: |
           VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          OPENWRT_VER="${{ env.OPENWRT_VER }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           PKG_LIST=""
@@ -283,41 +391,71 @@ jobs:
           cat > /tmp/release_notes.md <<EOF
           ## 云源插件发布 v${VERSION}
 
-          **编译时间**: $(date +'%Y-%m-%d %H:%M:%S UTC')
+          **OpenWrt 版本**: \`${OPENWRT_VER}\`  
+          **编译时间**: $(date +'%Y-%m-%d %H:%M:%S UTC')  
           **触发事件**: ${{ github.event_name }}
 
-          ### 下载说明
+          ---
 
-          下载对应架构的 \`.tar.gz\` 包，解压后即可作为 opkg 自定义源使用。
+          ### ⚠️ 内核版本一致性说明
 
-          ### 使用方法
+          > 使用本次编译产物前，**必须**确认路由器固件版本与 OpenWrt 版本匹配：
+          >
+          > **本次编译使用 OpenWrt ${OPENWRT_VER} SDK**，所有 \`kmod-*\` 内核模块包只能安装在  
+          > 运行 **OpenWrt ${OPENWRT_VER}** 固件的设备上，在其他版本固件上会出现内核哈希不匹配错误。
+          >
+          > **验证方法（在路由器上执行）：**
+          > \`\`\`bash
+          > opkg info kernel         # 输出中包含 Version 字段即为当前固件版本
+          > cat /proc/version        # 查看完整内核版本字符串
+          > \`\`\`
+          >
+          > 若版本不匹配，请先将固件升级/降级至 \`${OPENWRT_VER}\`，或等待本仓库发布对应版本的编译包。
 
-          1. 将压缩包上传到路由器或本地 HTTP 服务器
-          2. 在 OpenWrt 中添加源（\`/etc/opkg/customfeeds.conf\`）:
+          ---
 
-          \`\`\`
-          src/gz mzwrt-yun https://github.com/${{ github.repository }}/releases/latest/download
-          \`\`\`
+          ### 安装方法
 
-          3. 执行安装：
+          **方式一：直接安装 ipk（推荐）**
 
+          解压 \`.tar.gz\` 包后，将 \`.ipk\` 文件复制到路由器并执行：
           \`\`\`bash
+          opkg install /tmp/luci-app-xxx_*.ipk
+          \`\`\`
+
+          **方式二：作为 opkg 自定义源**
+
+          将压缩包解压到可通过 HTTP 访问的目录，然后在路由器上执行：
+          \`\`\`bash
+          echo "src/gz mzwrt-yun http://<your-server>/<arch>/packages" >> /etc/opkg/customfeeds.conf
           opkg update && opkg install <插件名>
           \`\`\`
 
-          ### 编译产物
+          ---
+
+          ### 编译产物列表
 
           $(echo -e "${PKG_LIST}")
 
-          ### 支持架构
+          ---
 
-          | 架构 | 适用设备 |
-          |------|---------|
-          | x86_64 | PC / 虚拟机 / x86 软路由 |
-          | aarch64_cortex-a72 | 树莓派 4 / ARM64 设备 |
-          | mipsel_24kc | Redmi AC2100 / MT7621 路由器 |
+          ### 支持架构说明
 
-          > 各架构的 SHA256 校验文件随包一同发布
+          | 架构 | 目标平台 | 典型设备 |
+          |------|---------|---------|
+          | \`x86_64\` | x86/64 | PC / 虚拟机 / N100 软路由 |
+          | \`aarch64_generic\` | rockchip/armv8 | NanoPi R5S/R4S/R4SE |
+          | \`aarch64_cortex-a53\` | mediatek/filogic | 小米 AX3000T, GL-MT6000, BPI-R3 |
+          | \`aarch64_cortex-a72\` | mvebu/cortexa72 | 树莓派 4 (同架构) |
+          | \`arm_cortex-a7_neon-vfpv4\` | ipq40xx/generic | GL-B1300, Linksys EA6350v3 |
+          | \`arm_cortex-a9_vfpv3-d16\` | mvebu/cortexa9 | Marvell Armada 370/XP |
+          | \`arm_cortex-a15_neon-vfpv4\` | ipq806x/generic | Netgear R7800, TP-Link C2600 |
+          | \`mips_24kc\` | ath79/generic | TP-Link WR940N, Archer A7/C7 |
+          | \`mipsel_24kc\` | ramips/mt7621 | 小米 AC2100, 新路由 Newifi D2 |
+          | \`mipsel_74kc\` | ramips/rt3883 | MediaTek MT7620 系列 |
+          | \`mipsel_mips32\` | bcm47xx/generic | Broadcom BCM47xx 路由器 |
+
+          > 各架构的 SHA256 校验文件随包一同发布。
           EOF
 
           echo "release_notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
@@ -326,7 +464,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.release_notes.outputs.version }}
-          name: 云源插件 v${{ steps.release_notes.outputs.version }}
+          name: 云源插件 v${{ steps.release_notes.outputs.version }} (OpenWrt ${{ env.OPENWRT_VER }})
           body_path: /tmp/release_notes.md
           draft: false
           prerelease: false
@@ -335,3 +473,4 @@ jobs:
             /tmp/artifacts/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

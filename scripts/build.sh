@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build.sh — 云源插件编译脚本
+# build.sh — 云源插件本地编译脚本
 # 用途: 拉取插件源码、使用 OpenWrt SDK 编译、生成 ipk 包
+#
+# OpenWrt 版本: 24.10.0  |  SDK 格式: .tar.zst  |  GCC: 13.3.0
+#
+# 内核版本一致性说明
+# ─────────────────
+# 使用此脚本编译时，SDK_URL 必须与目标固件版本严格对应。
+# 例如：SDK 24.10.0 编译的 kmod-* 包只能安装到 OpenWrt 24.10.0 固件。
+#
+# 用法示例:
+#   SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt7621/\
+#            openwrt-sdk-24.10.0-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst" \
+#   TARGET_ARCH="mipsel_24kc" \
+#   bash scripts/build.sh
 # =============================================================================
 set -euo pipefail
 
@@ -25,42 +38,61 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 # 检查依赖
 # --------------------------------------------------------------------------- #
 check_deps() {
-    local deps=(wget tar make git python3 rsync)
+    local deps=(wget tar make git python3 rsync zstd)
     for dep in "${deps[@]}"; do
-        command -v "$dep" >/dev/null 2>&1 || die "缺少依赖: $dep"
+        command -v "$dep" >/dev/null 2>&1 || die "缺少依赖: $dep (请安装后重试)"
     done
     log "依赖检查通过"
 }
 
 # --------------------------------------------------------------------------- #
 # 下载并解压 OpenWrt SDK
+# 注意: OpenWrt 24.10.x 起 SDK 使用 .tar.zst 格式
 # --------------------------------------------------------------------------- #
 setup_sdk() {
-    [[ -n "$SDK_URL" ]] || die "SDK_URL 未设置，请在 matrix 或环境变量中指定"
+    [[ -n "$SDK_URL" ]] || die "SDK_URL 未设置，请参考脚本头部注释指定 24.10.0 SDK 地址"
+
+    local sdk_file
+    sdk_file=$(basename "$SDK_URL")
+    local sdk_tar="/tmp/${sdk_file}"
 
     log "下载 SDK: $SDK_URL"
     mkdir -p "$BUILD_DIR"
-    local sdk_tar="$BUILD_DIR/sdk.tar.xz"
     wget -q --show-progress -O "$sdk_tar" "$SDK_URL"
 
-    log "解压 SDK ..."
-    tar -xJf "$sdk_tar" -C "$BUILD_DIR" --strip-components=1
+    log "解压 SDK (zstd 格式)..."
+    tar --zstd -xf "$sdk_tar" -C "$BUILD_DIR" --strip-components=1
     rm -f "$sdk_tar"
     log "SDK 就绪: $BUILD_DIR"
 }
 
 # --------------------------------------------------------------------------- #
-# 配置 feeds
+# 读取并显示内核版本（用于版本一致性核查）
+# --------------------------------------------------------------------------- #
+detect_kernel_version() {
+    local kver_file="$BUILD_DIR/include/kernel-version.mk"
+    [[ -f "$kver_file" ]] || { log "警告: 未找到 kernel-version.mk，跳过内核版本检测"; return; }
+
+    LINUX_VERSION=$(grep -m1 '^LINUX_VERSION:=' "$kver_file" | awk -F':=' '{gsub(/[[:space:]]/, "", $2); print $2}')
+    export LINUX_VERSION
+
+    log "======================================================"
+    log "内核版本检测结果"
+    log "  SDK 绑定内核版本 : Linux $LINUX_VERSION"
+    log "  适用固件版本     : 与此 SDK 对应的 OpenWrt 版本"
+    log ""
+    log "  ⚠️  kmod-* 包必须与目标固件内核版本完全一致！"
+    log "  在路由器上执行 'opkg info kernel' 可查看固件内核版本。"
+    log "======================================================"
+}
+
+# --------------------------------------------------------------------------- #
+# 配置 feeds（追加自定义插件 feed）
 # --------------------------------------------------------------------------- #
 setup_feeds() {
     local feeds_file="$BUILD_DIR/feeds.conf.default"
-    # 保留官方 feeds，添加自定义插件路径
-    cat >> "$feeds_file" <<'EOF'
-
-# 自定义插件 feed（由 build.sh 自动追加）
-src-link custom /tmp/custom_packages
-EOF
-    log "feeds.conf.default 已更新"
+    echo "src-link custom /tmp/custom_packages" >> "$feeds_file"
+    log "feeds.conf.default 已追加自定义 feed"
 }
 
 # --------------------------------------------------------------------------- #
@@ -71,10 +103,8 @@ clone_plugins() {
     mkdir -p "$custom_pkg_dir"
 
     while IFS= read -r line; do
-        # 跳过空行和注释
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
 
-        # 解析字段: <name> <url> [branch]
         read -r name url branch <<< "$line"
         [[ -z "$name" || -z "$url" ]] && continue
         branch="${branch:-main}"
@@ -110,7 +140,17 @@ configure_sdk() {
     cd "$BUILD_DIR"
     log "生成编译配置 ..."
 
-    # 选中所有自定义 feed 中的软件包
+    # 关闭不必要的全局编译选项
+    cat > .config <<'DOTCONFIG'
+CONFIG_ALL_NONSHARED=n
+CONFIG_ALL_KMODS=n
+CONFIG_ALL=n
+CONFIG_AUTOREMOVE=n
+CONFIG_SIGNED_PACKAGES=n
+CONFIG_LUCI_LANG_zh_Hans=y
+DOTCONFIG
+
+    # 将 plugins.conf 中的插件设为模块编译
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
         read -r name _ <<< "$line"
@@ -123,13 +163,17 @@ configure_sdk() {
 }
 
 # --------------------------------------------------------------------------- #
-# 执行编译
+# 执行编译（并行 → 单线程降级）
 # --------------------------------------------------------------------------- #
 compile_packages() {
     cd "$BUILD_DIR"
     log "开始编译 (jobs=$JOBS) ..."
-    make package/compile -j"$JOBS" V=s 2>&1 | tee /tmp/build.log \
-        || make package/compile -j1 V=s 2>&1 | tee /tmp/build.log
+    if make package/compile -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; then
+        log "并行编译成功"
+    else
+        log "并行编译失败，降级为单线程重试..."
+        make package/compile -j1 V=s 2>&1 | tee /tmp/build.log
+    fi
     log "编译完成"
 }
 
@@ -146,15 +190,21 @@ collect_packages() {
     local count
     count=$(find "$OUTPUT_DIR/packages" -name "*.ipk" | wc -l)
     log "共收集 $count 个 ipk 包"
+
+    if [[ -n "${LINUX_VERSION:-}" ]]; then
+        echo "$LINUX_VERSION" > "$OUTPUT_DIR/kernel-version.txt"
+        log "内核版本已记录: $OUTPUT_DIR/kernel-version.txt"
+    fi
 }
 
 # --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
 main() {
-    log "====== 云源插件编译开始 ======"
+    log "====== 云源插件编译开始 (OpenWrt 24.10.0) ======"
     check_deps
     setup_sdk
+    detect_kernel_version
     clone_plugins
     setup_feeds
     install_feeds
