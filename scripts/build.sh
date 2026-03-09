@@ -246,9 +246,9 @@ main() {
     setup_sdk
     detect_kernel_version
     clone_plugins
-    run_arch_hook
     setup_feeds
     install_feeds
+    run_arch_hook
     configure_sdk
     compile_packages
     collect_packages
