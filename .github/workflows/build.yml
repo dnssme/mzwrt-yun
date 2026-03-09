@@ -1,0 +1,337 @@
+name: 云源插件自动编译发布
+
+on:
+  # 手动触发，支持选择架构
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '编译目标架构 (留空则编译所有)'
+        required: false
+        default: ''
+      release:
+        description: '是否发布 Release'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+  # 定时触发：每周一凌晨 2 点（UTC）自动编译
+  schedule:
+    - cron: '0 2 * * 1'
+
+  # 插件配置更新时自动触发
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'plugins.conf'
+      - 'config/**'
+      - '.github/workflows/build.yml'
+
+env:
+  # 编译输出根目录
+  OUTPUT_ROOT: ${{ github.workspace }}/output
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: 矩阵编译 — 为每个架构并行构建
+  # ─────────────────────────────────────────────────────────────────────────
+  build:
+    name: 编译 [${{ matrix.name }}]
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 (PC / 虚拟机)
+          - name: x86_64
+            target: x86
+            subtarget: 64
+            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+
+          # ARMv8 (树莓派 4 / 常见 ARM 路由器)
+          - name: aarch64_cortex-a72
+            target: bcm27xx
+            subtarget: bcm2711
+            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/bcm27xx/bcm2711/openwrt-sdk-23.05.3-bcm27xx-bcm2711_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+
+          # MT7621 (Redmi AC2100 / 小米路由器)
+          - name: mipsel_24kc
+            target: ramips
+            subtarget: mt7621
+            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+
+    # 如果手动触发且指定了架构，则只编译该架构
+    if: >
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.target == '' ||
+      github.event.inputs.target == matrix.name
+
+    steps:
+      # ── 检出代码 ──────────────────────────────────────────────────────────
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      # ── 安装系统依赖 ──────────────────────────────────────────────────────
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses5-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev \
+            file wget libelf-dev ecj fastjar java-propose-classpath \
+            qemu-utils subversion mercurial libreadline-dev \
+            xsltproc zstd
+
+      # ── 下载并解压 SDK ────────────────────────────────────────────────────
+      - name: 配置 OpenWrt SDK
+        env:
+          SDK_URL: ${{ matrix.sdk_url }}
+          BUILD_DIR: /tmp/openwrt-sdk
+        run: |
+          echo "::group::下载 SDK"
+          mkdir -p /tmp/openwrt-sdk
+          wget -q --show-progress -O /tmp/sdk.tar.xz "$SDK_URL"
+          echo "::endgroup::"
+
+          echo "::group::解压 SDK"
+          tar -xJf /tmp/sdk.tar.xz -C /tmp/openwrt-sdk --strip-components=1
+          rm -f /tmp/sdk.tar.xz
+          echo "::endgroup::"
+
+      # ── 克隆插件源码 ──────────────────────────────────────────────────────
+      - name: 克隆插件源码
+        id: clone_plugins
+        run: |
+          mkdir -p /tmp/custom_packages
+          failed=0
+          total=0
+
+          while IFS= read -r line; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            read -r name url branch <<< "$line"
+            [[ -z "$name" || -z "$url" ]] && continue
+            branch="${branch:-main}"
+            total=$((total+1))
+
+            echo "::group::克隆 $name"
+            if git clone --depth=1 --branch "$branch" "$url" "/tmp/custom_packages/$name" 2>/dev/null \
+               || git clone --depth=1 "$url" "/tmp/custom_packages/$name"; then
+              echo "✅ $name 克隆成功"
+            else
+              echo "⚠️ $name 克隆失败（已跳过）"
+              failed=$((failed+1))
+            fi
+            echo "::endgroup::"
+          done < plugins.conf
+
+          echo "clone_total=$total" >> "$GITHUB_OUTPUT"
+          echo "clone_failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "共克隆 $total 个插件，失败 $failed 个"
+
+      # ── 配置 feeds ────────────────────────────────────────────────────────
+      - name: 配置 feeds
+        working-directory: /tmp/openwrt-sdk
+        run: |
+          cat >> feeds.conf.default <<'EOF'
+          src-link custom /tmp/custom_packages
+          EOF
+
+          echo "::group::更新 feeds"
+          ./scripts/feeds update -a
+          echo "::endgroup::"
+
+          echo "::group::安装 feeds"
+          ./scripts/feeds install -a
+          echo "::endgroup::"
+
+      # ── 生成编译配置 ──────────────────────────────────────────────────────
+      - name: 生成编译配置
+        working-directory: /tmp/openwrt-sdk
+        run: |
+          while IFS= read -r line; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            read -r name _ <<< "$line"
+            [[ -z "$name" ]] && continue
+            echo "CONFIG_PACKAGE_${name}=m"
+          done < "$GITHUB_WORKSPACE/plugins.conf" >> .config
+
+          make defconfig
+
+      # ── 执行编译 ──────────────────────────────────────────────────────────
+      - name: 编译插件
+        working-directory: /tmp/openwrt-sdk
+        run: |
+          echo "::group::并行编译"
+          make package/compile -j$(nproc) V=s 2>&1 | tee /tmp/build.log \
+          || make package/compile -j1 V=s 2>&1 | tee /tmp/build.log
+          echo "::endgroup::"
+
+      # ── 收集 ipk 包 ───────────────────────────────────────────────────────
+      - name: 收集编译产物
+        run: |
+          PKG_DIR="${OUTPUT_ROOT}/${{ matrix.name }}/packages"
+          mkdir -p "$PKG_DIR"
+          find /tmp/openwrt-sdk/bin/packages -name "*.ipk" \
+              -exec cp -v {} "$PKG_DIR/" \;
+          count=$(find "$PKG_DIR" -name "*.ipk" | wc -l)
+          echo "收集 ipk 数量: $count"
+          echo "pkg_count=$count" >> "$GITHUB_ENV"
+
+      # ── 生成包索引 ────────────────────────────────────────────────────────
+      - name: 生成 opkg 包索引
+        run: |
+          PKG_DIR="${OUTPUT_ROOT}/${{ matrix.name }}/packages"
+          : > "$PKG_DIR/Packages"
+          for ipk in "$PKG_DIR"/*.ipk; do
+            [[ -f "$ipk" ]] || continue
+            pkg_name=$(basename "$ipk" .ipk | sed 's/_[^_]*_[^_]*$//')
+            pkg_size=$(wc -c < "$ipk")
+            pkg_sha256=$(sha256sum "$ipk" | awk '{print $1}')
+            printf "Package: %s\nFilename: %s\nSize: %s\nSHA256sum: %s\n\n" \
+              "$pkg_name" "$(basename "$ipk")" "$pkg_size" "$pkg_sha256" \
+              >> "$PKG_DIR/Packages"
+          done
+          gzip -9 -k "$PKG_DIR/Packages"
+          echo "包索引生成完成"
+
+      # ── 打包云源归档 ──────────────────────────────────────────────────────
+      - name: 打包云源归档
+        id: package
+        run: |
+          VERSION="$(date +'%Y%m%d')-$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD 2>/dev/null || echo 'local')"
+          TARBALL="${OUTPUT_ROOT}/mzwrt-yun-plugins-${{ matrix.name }}-${VERSION}.tar.gz"
+          tar -czf "$TARBALL" -C "${OUTPUT_ROOT}" "${{ matrix.name }}/"
+          sha256sum "$TARBALL" > "${TARBALL}.sha256"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "tarball_name=$(basename "$TARBALL")" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "云源包: $(basename "$TARBALL")  大小: $(du -sh "$TARBALL" | cut -f1)"
+
+      # ── 上传构建产物 ──────────────────────────────────────────────────────
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugins-${{ matrix.name }}
+          path: |
+            ${{ env.OUTPUT_ROOT }}/mzwrt-yun-plugins-${{ matrix.name }}-*.tar.gz
+            ${{ env.OUTPUT_ROOT }}/mzwrt-yun-plugins-${{ matrix.name }}-*.tar.gz.sha256
+          retention-days: 7
+
+      # ── 上传编译日志（仅失败时）──────────────────────────────────────────
+      - name: 上传编译日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.name }}
+          path: /tmp/build.log
+          retention-days: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: 发布 GitHub Release
+  # ─────────────────────────────────────────────────────────────────────────
+  release:
+    name: 发布云源 Release
+    needs: build
+    runs-on: ubuntu-22.04
+    # 只有在所有编译 job 完成后，且满足发布条件时才运行
+    if: >
+      always() &&
+      needs.build.result != 'cancelled' &&
+      (
+        github.event_name == 'schedule' ||
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+      )
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plugins-*
+          path: /tmp/artifacts
+          merge-multiple: true
+
+      - name: 生成发布说明
+        id: release_notes
+        run: |
+          VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          PKG_LIST=""
+          for f in /tmp/artifacts/*.tar.gz; do
+            [[ -f "$f" ]] || continue
+            name=$(basename "$f")
+            size=$(du -sh "$f" | cut -f1)
+            PKG_LIST="${PKG_LIST}\n- \`${name}\` (${size})"
+          done
+
+          cat > /tmp/release_notes.md <<EOF
+          ## 云源插件发布 v${VERSION}
+
+          **编译时间**: $(date +'%Y-%m-%d %H:%M:%S UTC')
+          **触发事件**: ${{ github.event_name }}
+
+          ### 下载说明
+
+          下载对应架构的 \`.tar.gz\` 包，解压后即可作为 opkg 自定义源使用。
+
+          ### 使用方法
+
+          1. 将压缩包上传到路由器或本地 HTTP 服务器
+          2. 在 OpenWrt 中添加源（\`/etc/opkg/customfeeds.conf\`）:
+
+          \`\`\`
+          src/gz mzwrt-yun https://github.com/${{ github.repository }}/releases/latest/download
+          \`\`\`
+
+          3. 执行安装：
+
+          \`\`\`bash
+          opkg update && opkg install <插件名>
+          \`\`\`
+
+          ### 编译产物
+
+          $(echo -e "${PKG_LIST}")
+
+          ### 支持架构
+
+          | 架构 | 适用设备 |
+          |------|---------|
+          | x86_64 | PC / 虚拟机 / x86 软路由 |
+          | aarch64_cortex-a72 | 树莓派 4 / ARM64 设备 |
+          | mipsel_24kc | Redmi AC2100 / MT7621 路由器 |
+
+          > 各架构的 SHA256 校验文件随包一同发布
+          EOF
+
+          echo "release_notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.release_notes.outputs.version }}
+          name: 云源插件 v${{ steps.release_notes.outputs.version }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            /tmp/artifacts/*.tar.gz
+            /tmp/artifacts/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
