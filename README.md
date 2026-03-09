@@ -2,7 +2,7 @@
 
 [![云源插件自动编译发布](https://github.com/dnssme/mzwrt-yun/actions/workflows/build.yml/badge.svg)](https://github.com/dnssme/mzwrt-yun/actions/workflows/build.yml)
 
-自动拉取指定插件仓库源码，使用 **OpenWrt 24.10.0 SDK** 编译后打包成云源格式并发布 GitHub Release。
+自动拉取指定插件仓库源码，使用 **OpenWrt 24.10.5 SDK** 编译后打包成云源格式并发布 GitHub Release。
 
 ---
 
@@ -113,7 +113,7 @@ cat /proc/version     # 完整内核版本字符串
 ubus call system board # 显示 OpenWrt 版本信息（含 kernel_version 字段）
 ```
 
-示例输出（OpenWrt 24.10.0）：
+示例输出（OpenWrt 24.10.5）：
 
 ```
 Package: kernel
@@ -125,7 +125,7 @@ Version: 6.6.68-r0+...
 每次发布的 Release notes 中都包含本次编译所用的 OpenWrt 版本和内核版本：
 
 ```
-OpenWrt 版本: 24.10.0
+OpenWrt 版本: 24.10.5
 内核版本: 6.6.68
 ```
 
@@ -133,9 +133,9 @@ OpenWrt 版本: 24.10.0
 
 | 场景 | 结论 |
 |------|------|
-| 路由器固件 = OpenWrt 24.10.0，下载本仓库 24.10.0 编译包 | ✅ 完全兼容 |
-| 路由器固件 = OpenWrt 24.10.1，下载本仓库 24.10.0 编译包 | ⚠️ 用户空间包可用，kmod-* 不兼容 |
-| 路由器固件 = OpenWrt 23.05.x，下载本仓库 24.10.0 编译包 | ❌ 不兼容，请使用 23.05.x 编译包 |
+| 路由器固件 = OpenWrt 24.10.5，下载本仓库 24.10.5 编译包 | ✅ 完全兼容 |
+| 路由器固件 = OpenWrt 24.10.1，下载本仓库 24.10.5 编译包 | ⚠️ 用户空间包可用，kmod-* 不兼容 |
+| 路由器固件 = OpenWrt 23.05.x，下载本仓库 24.10.5 编译包 | ❌ 不兼容，请使用 23.05.x 编译包 |
 
 **第四步：更新 SDK 版本**
 
@@ -143,7 +143,7 @@ OpenWrt 版本: 24.10.0
 
 ```yaml
 env:
-  OPENWRT_VER: "24.10.0"   # ← 改为新版本号（如 24.10.1）
+  OPENWRT_VER: "24.10.5"   # ← 改为新版本号（如 24.10.6 或 24.11.0）
   SDK_VER: "24.10"
 ```
 
@@ -177,7 +177,7 @@ env:
 sudo apt-get install -y build-essential wget git python3 zstd
 
 # 设置 SDK 地址（以 mipsel_24kc/MT7621 为例）
-export SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt7621/openwrt-sdk-24.10.0-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+export SDK_URL="https://downloads.openwrt.org/releases/24.10.5/targets/ramips/mt7621/openwrt-sdk-24.10.5-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
 export TARGET_ARCH="mipsel_24kc"
 export OUTPUT_DIR="$(pwd)/output"
 

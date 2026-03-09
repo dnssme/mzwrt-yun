@@ -2,7 +2,7 @@ name: 云源插件自动编译发布
 
 # =============================================================================
 # OpenWrt 版本说明
-# 当前使用: OpenWrt 24.10.0  |  GCC 13.3.0  |  Linux 6.6.x
+# 当前使用: OpenWrt 24.10.5  |  GCC 13.3.0  |  Linux 6.6.x
 #
 # 内核版本一致性说明（重要！）
 # ─────────────────────────────
@@ -10,8 +10,8 @@ name: 云源插件自动编译发布
 #   1. 用户空间包 (luci-app-*, 服务类)   —— 只需架构相同即可安装
 #   2. 内核模块 (kmod-*)               —— 必须与目标固件内核版本 **完全一致**
 #
-# SDK 在构建时已绑定特定的内核版本。用 SDK 24.10.0 编译出的 kmod-* 包，
-# 只能安装到同样使用 OpenWrt 24.10.0 固件的路由器上。
+# SDK 在构建时已绑定特定的内核版本。用 SDK 24.10.5 编译出的 kmod-* 包，
+# 只能安装到同样使用 OpenWrt 24.10.5 固件的路由器上。
 # 若固件升级到 24.10.1，kmod 包也必须用 24.10.1 的 SDK 重新编译。
 #
 # 验证方法（在路由器上执行）：
@@ -55,7 +55,7 @@ on:
 
 env:
   # OpenWrt 版本（更新固件版本时同步修改此处）
-  OPENWRT_VER: "24.10.0"
+  OPENWRT_VER: "24.10.5"
   SDK_VER: "24.10"
   # 编译输出根目录
   OUTPUT_ROOT: ${{ github.workspace }}/output
@@ -78,57 +78,57 @@ jobs:
           # ── x86_64 ─────────────────────────────────────────────────────────
           # 适用设备: PC / 虚拟机 / x86 软路由 (J1900, N100, i226V 等)
           - name: x86_64
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/x86/64/openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── aarch64_generic ────────────────────────────────────────────────
           # 适用设备: RockChip RK35xx 系列 (NanoPi R5S/R4S/R4SE, FriendlyWRT)
           - name: aarch64_generic
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/rockchip/armv8/openwrt-sdk-24.10.0-rockchip-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/rockchip/armv8/openwrt-sdk-24.10.5-rockchip-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── aarch64_cortex-a53 ─────────────────────────────────────────────
           # 适用设备: MediaTek MT7981/MT7986 Filogic (小米 AX3000T, GL-MT6000, BPI-R3, CMCC-RAX3000M)
           - name: aarch64_cortex-a53
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/mediatek/filogic/openwrt-sdk-24.10.5-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── aarch64_cortex-a72 ─────────────────────────────────────────────
           # 适用设备: Marvell Armada 8040 / 树莓派 4 (bcm2711 同架构)
           - name: aarch64_cortex-a72
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/mvebu/cortexa72/openwrt-sdk-24.10.0-mvebu-cortexa72_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/mvebu/cortexa72/openwrt-sdk-24.10.5-mvebu-cortexa72_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── arm_cortex-a7_neon-vfpv4 ───────────────────────────────────────
           # 适用设备: Qualcomm IPQ40xx (GL-B1300, Linksys EA6350v3, ZTE MF286D)
           - name: arm_cortex-a7_neon-vfpv4
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ipq40xx/generic/openwrt-sdk-24.10.0-ipq40xx-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/ipq40xx/generic/openwrt-sdk-24.10.5-ipq40xx-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
 
           # ── arm_cortex-a9_vfpv3-d16 ────────────────────────────────────────
           # 适用设备: Marvell Armada 370/375/385/XP
           - name: arm_cortex-a9_vfpv3-d16
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/mvebu/cortexa9/openwrt-sdk-24.10.0-mvebu-cortexa9_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/mvebu/cortexa9/openwrt-sdk-24.10.5-mvebu-cortexa9_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
 
           # ── arm_cortex-a15_neon-vfpv4 ──────────────────────────────────────
           # 适用设备: Qualcomm IPQ806x (Netgear R7800, TP-Link C2600, Linksys EA8500)
           - name: arm_cortex-a15_neon-vfpv4
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ipq806x/generic/openwrt-sdk-24.10.0-ipq806x-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/ipq806x/generic/openwrt-sdk-24.10.5-ipq806x-generic_gcc-13.3.0_musl_eabi.Linux-x86_64.tar.zst
 
           # ── mips_24kc ──────────────────────────────────────────────────────
           # 适用设备: Qualcomm/Atheros ath79 (TP-Link WR940N/Archer A7/C7, ASUS RT-AC51U)
           - name: mips_24kc
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ath79/generic/openwrt-sdk-24.10.0-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/ath79/generic/openwrt-sdk-24.10.5-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── mipsel_24kc ────────────────────────────────────────────────────
           # 适用设备: MediaTek MT7621 (小米 AC2100/4A-Gigabit, 新路由 Newifi D2, 斐讯 K2P)
           - name: mipsel_24kc
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt7621/openwrt-sdk-24.10.0-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/ramips/mt7621/openwrt-sdk-24.10.5-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── mipsel_74kc ────────────────────────────────────────────────────
           # 适用设备: MediaTek MT7620/Ralink RT3883 系列路由器
           - name: mipsel_74kc
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ramips/rt3883/openwrt-sdk-24.10.0-ramips-rt3883_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/ramips/rt3883/openwrt-sdk-24.10.5-ramips-rt3883_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
           # ── mipsel_mips32 ──────────────────────────────────────────────────
           # 适用设备: Broadcom BCM47xx MIPS32 (旧款 Linksys/Netgear/ASUS BCM 路由器)
           - name: mipsel_mips32
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/bcm47xx/generic/openwrt-sdk-24.10.0-bcm47xx-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/bcm47xx/generic/openwrt-sdk-24.10.5-bcm47xx-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
     # 如果手动触发且指定了架构，则只编译该架构
     if: >
