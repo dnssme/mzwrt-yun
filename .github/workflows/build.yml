@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: '编译目标架构 (留空则编译所有架构)'
+        description: '编译目标架构 (当前版本始终编译所有架构，此参数仅供记录用途)'
         required: false
         default: ''
       release:
@@ -129,12 +129,6 @@ jobs:
           # 适用设备: Broadcom BCM47xx MIPS32 (旧款 Linksys/Netgear/ASUS BCM 路由器)
           - name: mipsel_mips32
             sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/bcm47xx/generic/openwrt-sdk-24.10.5-bcm47xx-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-
-    # 如果手动触发且指定了架构，则只编译该架构
-    if: >
-      github.event_name != 'workflow_dispatch' ||
-      github.event.inputs.target == '' ||
-      github.event.inputs.target == matrix.name
 
     steps:
       # ── 检出代码 ──────────────────────────────────────────────────────────
@@ -262,7 +256,7 @@ jobs:
         working-directory: /tmp/openwrt-sdk
         run: |
           echo "::group::并行编译 ($(nproc) 线程)"
-          if make package/compile -j$(nproc) V=s 2>&1 | tee /tmp/build.log; then
+          if make package/compile -j"$(nproc)" V=s 2>&1 | tee /tmp/build.log; then
             echo "::endgroup::"
             echo "✅ 并行编译成功"
           else
@@ -317,10 +311,12 @@ jobs:
           tar -czf "$TARBALL" -C "${OUTPUT_ROOT}" "${{ matrix.name }}/"
           sha256sum "$TARBALL" > "${TARBALL}.sha256"
 
-          echo "tarball=$TARBALL"         >> "$GITHUB_OUTPUT"
-          echo "tarball_name=$(basename "$TARBALL")" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION"         >> "$GITHUB_OUTPUT"
-          echo "linux_ver=$LINUX_VER"     >> "$GITHUB_OUTPUT"
+          {
+            echo "tarball=$TARBALL"
+            echo "tarball_name=$(basename "$TARBALL")"
+            echo "version=$VERSION"
+            echo "linux_ver=$LINUX_VER"
+          } >> "$GITHUB_OUTPUT"
           echo "云源包: $(basename "$TARBALL")  大小: $(du -sh "$TARBALL" | cut -f1)"
           echo "绑定内核版本: $LINUX_VER (仅适用于 OpenWrt ${{ env.OPENWRT_VER }} 固件)"
 
