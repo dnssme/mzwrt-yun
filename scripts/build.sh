@@ -89,6 +89,28 @@ detect_kernel_version() {
 }
 
 # --------------------------------------------------------------------------- #
+# 执行架构自定义 hook 脚本
+# 在插件克隆完成之后、feeds 安装之前执行，用于应用补丁和设置环境变量。
+# --------------------------------------------------------------------------- #
+run_arch_hook() {
+    local hook_dir
+    hook_dir="$(cd "$(dirname "$0")" && pwd)/hooks"
+    local hook_script="${hook_dir}/${TARGET_ARCH}.sh"
+
+    export SDK_DIR="$BUILD_DIR"
+    export CUSTOM_PKG_DIR="/tmp/custom_packages"
+    export ARCH="$TARGET_ARCH"
+
+    if [[ -f "$hook_script" ]]; then
+        log "执行架构自定义脚本: $hook_script"
+        # shellcheck source=/dev/null
+        source "$hook_script"
+    else
+        log "未找到架构自定义脚本 $hook_script，跳过"
+    fi
+}
+
+# --------------------------------------------------------------------------- #
 # 配置 feeds（追加自定义插件 feed）
 # --------------------------------------------------------------------------- #
 setup_feeds() {
@@ -151,12 +173,6 @@ CONFIG_ALL=n
 CONFIG_AUTOREMOVE=n
 CONFIG_SIGNED_PACKAGES=n
 CONFIG_LUCI_LANG_zh_Hans=y
-# Rust 1.89.0 bootstrap panics with "llvm.download-ci-llvm cannot be set to true on CI"
-# when run inside GitHub Actions. Exclude the package to prevent build failure.
-CONFIG_PACKAGE_rust=n
-# uboot-fritz4040 requires a bundled x86 ELF interpreter that is absent in the SDK
-# staging directory, causing a "No such file or directory" error on ipq40xx targets.
-CONFIG_PACKAGE_uboot-fritz4040=n
 DOTCONFIG
 
     # 显式标记 plugins.conf 中的插件，确保其优先被包含
@@ -168,6 +184,18 @@ DOTCONFIG
     done < "$PLUGINS_CONF"
 
     make defconfig
+
+    # ⚠️ 在 defconfig 之后禁用已知会导致编译失败的包。
+    # 必须在 make defconfig 之后操作，因为 CONFIG_ALL_NONSHARED=y
+    # 会在 defconfig 时覆盖 .config 中预先写入的 =n 设置。
+    #
+    # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true 被禁止而 panic。
+    # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在。
+    for pkg in rust uboot-fritz4040; do
+        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+    done
+
     log "配置完成"
 }
 
@@ -218,6 +246,7 @@ main() {
     setup_sdk
     detect_kernel_version
     clone_plugins
+    run_arch_hook
     setup_feeds
     install_feeds
     configure_sdk
