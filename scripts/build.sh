@@ -151,6 +151,12 @@ CONFIG_ALL=n
 CONFIG_AUTOREMOVE=n
 CONFIG_SIGNED_PACKAGES=n
 CONFIG_LUCI_LANG_zh_Hans=y
+# Rust 1.89.0 bootstrap panics with "llvm.download-ci-llvm cannot be set to true on CI"
+# when run inside GitHub Actions. Exclude the package to prevent build failure.
+CONFIG_PACKAGE_rust=n
+# uboot-fritz4040 requires a bundled x86 ELF interpreter that is absent in the SDK
+# staging directory, causing a "No such file or directory" error on ipq40xx targets.
+CONFIG_PACKAGE_uboot-fritz4040=n
 DOTCONFIG
 
     # 显式标记 plugins.conf 中的插件，确保其优先被包含
