@@ -31,7 +31,12 @@ mzwrt-yun/
 │   └── targets.conf           # 编译目标架构与 SDK URL 配置
 ├── scripts/
 │   ├── build.sh               # 本地编译脚本
-│   └── package.sh             # 云源打包脚本
+│   ├── package.sh             # 云源打包脚本
+│   └── hooks/                 # 架构自定义 hook 脚本目录
+│       ├── _example.sh        # hook 脚本模板（含详细注释）
+│       ├── x86_64.sh          # x86_64 架构 hook
+│       ├── aarch64_generic.sh # aarch64_generic 架构 hook
+│       └── ...                # 其他架构 hook（一架构一文件）
 ├── plugins.conf               # 插件仓库列表（主要配置入口）
 └── README.md
 ```
@@ -58,25 +63,88 @@ luci-app-passwall    https://github.com/xiaorouji/openwrt-passwall  main
 - 选择目标架构（留空则编译所有 11 种架构）
 - 选择是否发布 Release
 
-### 3. 使用编译产物
+### 3. 架构自定义脚本（补丁 / 环境变量）
+
+每个架构对应一个 hook 脚本，路径为 `scripts/hooks/<架构名>.sh`。  
+脚本在插件克隆完成之后、feeds 安装之前执行，适合：
+
+- 向 SDK 或插件源码应用补丁
+- 设置特定架构的编译环境变量
+- 安装额外的系统依赖
+
+**示例：为 x86_64 应用 SDK 补丁**
+
+```bash
+# scripts/hooks/x86_64.sh
+patch -d "$SDK_DIR" -p1 < "$GITHUB_WORKSPACE/patches/my-sdk-fix.patch"
+```
+
+**示例：设置持久化环境变量（GitHub Actions）**
+
+```bash
+# scripts/hooks/aarch64_cortex-a53.sh
+echo "EXTRA_CFLAGS=-march=cortex-a53" >> "$GITHUB_ENV"
+```
+
+**示例：在本地 build.sh 中设置环境变量**
+
+```bash
+# scripts/hooks/mipsel_24kc.sh
+export EXTRA_CFLAGS="-mips32r2 -msoft-float"
+```
+
+可用的环境变量：
+
+| 变量 | 说明 |
+|------|------|
+| `$SDK_DIR` | OpenWrt SDK 目录（如 `/tmp/openwrt-sdk`） |
+| `$CUSTOM_PKG_DIR` | 已克隆的插件源码目录（如 `/tmp/custom_packages`） |
+| `$ARCH` | 当前架构名称（如 `x86_64`） |
+| `$GITHUB_ENV` | GitHub Actions 环境变量文件（写入后对后续步骤生效） |
+| `$GITHUB_WORKSPACE` | 仓库根目录路径 |
+
+详细使用说明参见 [`scripts/hooks/_example.sh`](./scripts/hooks/_example.sh)。
+
+### 4. 使用编译产物
 
 从 [Releases](../../releases) 页面下载对应架构的 `.tar.gz` 包：
 
 **方式一：直接安装 ipk（推荐）**
 
 ```bash
-# 将 ipk 文件上传到路由器 /tmp 目录后执行
+# 解压后将 ipk 文件上传到路由器 /tmp 目录，然后执行：
 opkg install /tmp/luci-app-xxx_*.ipk
 ```
 
-**方式二：作为 opkg 自定义源**
+**方式二：作为 opkg 自定义源（可平替官方源）**
+
+编译产物包含完整的官方 feeds 包 + 第三方插件，格式与官方 opkg 源完全兼容。  
+将发布包解压到可通过 HTTP 访问的服务器目录后，在路由器上执行：
 
 ```bash
-# 将包解压到路由器可访问的 HTTP 服务目录
+# 1. 在路由器上添加自定义源（packages 目录为解压后的 <arch>/packages）
+echo "src/gz mzwrt-yun http://<your-server>/<arch>/packages" >> /etc/opkg/customfeeds.conf
+
+# 2. 更新并安装插件
+opkg update
+opkg install luci-app-openclash
+opkg install luci-app-passwall
+# ... 其他插件名称见 Release notes 中的插件列表
+```
+
+**方式三：通过 GitHub Releases 作为在线源**
+
+如果你的路由器可以访问 GitHub，可以直接使用 Release 资产地址：
+
+```bash
+# 将对应架构的 packages 目录发布后，在路由器上添加：
+# 注意：需要先将 .tar.gz 解压到可通过 HTTP 访问的目录
 echo "src/gz mzwrt-yun http://<your-server>/<arch>/packages" >> /etc/opkg/customfeeds.conf
 opkg update
 opkg install <插件名>
 ```
+
+> **说明**：编译时使用了 `CONFIG_ALL_NONSHARED=y`，会编译所有官方 feeds（base/packages/luci/routing/telephony）中的用户空间包以及所有第三方插件及其依赖，输出格式与官方 opkg 源完全兼容，可直接替换官方源地址使用。
 
 ---
 

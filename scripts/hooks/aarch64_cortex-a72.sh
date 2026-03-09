@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# =============================================================================
+# aarch64_cortex-a72 架构自定义 hook 脚本
+# =============================================================================
+#
+# 此脚本在 OpenWrt SDK 解压和插件克隆完成之后、feeds 安装之前执行。
+# 可用于应用补丁、设置环境变量等架构特定操作。
+#
+# 可用环境变量:
+#   $SDK_DIR         : OpenWrt SDK 目录
+#   $CUSTOM_PKG_DIR  : 插件源码目录
+#   $ARCH            : 当前架构 (aarch64_cortex-a72)
+#
+# 在 GitHub Actions 中持久化环境变量，请写入 $GITHUB_ENV：
+#   echo "VAR=value" >> "$GITHUB_ENV"
+#
+# =============================================================================
+
+# 在此添加 aarch64_cortex-a72 特定的操作，例如：
+# echo "VAR=value" >> "$GITHUB_ENV"
+# patch -d "$SDK_DIR" -p1 < patches/aarch64_cortex-a72-fix.patch

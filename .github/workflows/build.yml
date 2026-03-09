@@ -51,6 +51,7 @@ on:
     paths:
       - 'plugins.conf'
       - 'config/**'
+      - 'scripts/hooks/**'
       - '.github/workflows/build.yml'
 
 env:
@@ -219,6 +220,26 @@ jobs:
           echo "clone_failed=$failed" >> "$GITHUB_OUTPUT"
           echo "共克隆 $total 个插件，失败 $failed 个"
 
+      # ── 执行架构自定义 hook 脚本 ─────────────────────────────────────────
+      # 若 scripts/hooks/<arch>.sh 存在，则在此执行。
+      # 可用于应用补丁、设置架构特定环境变量等操作。
+      # 可用变量: $SDK_DIR, $CUSTOM_PKG_DIR, $ARCH
+      # 持久化环境变量请写入 $GITHUB_ENV，例如:
+      #   echo "MY_VAR=value" >> "$GITHUB_ENV"
+      - name: 执行架构自定义脚本
+        env:
+          SDK_DIR: /tmp/openwrt-sdk
+          CUSTOM_PKG_DIR: /tmp/custom_packages
+          ARCH: ${{ matrix.name }}
+        run: |
+          HOOK="$GITHUB_WORKSPACE/scripts/hooks/${{ matrix.name }}.sh"
+          if [[ -f "$HOOK" ]]; then
+            echo "执行架构自定义脚本: scripts/hooks/${{ matrix.name }}.sh"
+            bash "$HOOK"
+          else
+            echo "未找到自定义脚本 scripts/hooks/${{ matrix.name }}.sh，跳过"
+          fi
+
       # ── 配置 feeds ────────────────────────────────────────────────────────
       # 将自定义插件目录作为额外 feed 追加到 SDK 默认配置后
       - name: 配置 feeds
@@ -248,12 +269,6 @@ jobs:
           CONFIG_AUTOREMOVE=n
           CONFIG_SIGNED_PACKAGES=n
           CONFIG_LUCI_LANG_zh_Hans=y
-          # Rust 1.89.0 bootstrap panics with "llvm.download-ci-llvm cannot be set to true on CI"
-          # when run inside GitHub Actions. Exclude the package to prevent build failure.
-          CONFIG_PACKAGE_rust=n
-          # uboot-fritz4040 requires a bundled x86 ELF interpreter that is absent in the SDK
-          # staging directory, causing a "No such file or directory" error on ipq40xx targets.
-          CONFIG_PACKAGE_uboot-fritz4040=n
           DOTCONFIG
 
           # 显式标记 plugins.conf 中的插件，确保其优先被包含
@@ -265,6 +280,19 @@ jobs:
           done < "$GITHUB_WORKSPACE/plugins.conf" >> .config
 
           make defconfig
+
+          # ⚠️ 在 defconfig 之后禁用已知在 CI 环境中会编译失败的包。
+          # 必须在 make defconfig 之后操作，因为 CONFIG_ALL_NONSHARED=y
+          # 会在 defconfig 时覆盖 .config 中预先写入的 =n 设置。
+          #
+          # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true
+          #   被禁止而 panic（GitHub Actions 自动设置 CI=true）。
+          # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在，
+          #   导致 ipq40xx 等架构编译报 "No such file or directory"。
+          for pkg in rust uboot-fritz4040; do
+            sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+          done
 
       # ── 执行编译 ──────────────────────────────────────────────────────────
       # 优先并行编译；若失败则自动降级为单线程重试（排查具体错误）。
