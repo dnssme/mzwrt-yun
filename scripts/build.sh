@@ -42,6 +42,8 @@ check_deps() {
     for dep in "${deps[@]}"; do
         command -v "$dep" >/dev/null 2>&1 || die "缺少依赖: $dep (请安装后重试)"
     done
+    python3 -c "import elftools" >/dev/null 2>&1 \
+        || die "缺少 Python3 模块: pyelftools (请执行: pip install pyelftools 或 apt-get install python3-pyelftools)"
     log "依赖检查通过"
 }
 
@@ -135,14 +137,15 @@ install_feeds() {
 
 # --------------------------------------------------------------------------- #
 # 生成最小化 .config
+# CONFIG_ALL_NONSHARED=y: 编译所有 feeds（官方 + 自定义）中的用户空间包，
+# 使输出可平替官方源，包含所有插件依赖。
 # --------------------------------------------------------------------------- #
 configure_sdk() {
     cd "$BUILD_DIR"
     log "生成编译配置 ..."
 
-    # 关闭不必要的全局编译选项
     cat > .config <<'DOTCONFIG'
-CONFIG_ALL_NONSHARED=n
+CONFIG_ALL_NONSHARED=y
 CONFIG_ALL_KMODS=n
 CONFIG_ALL=n
 CONFIG_AUTOREMOVE=n
@@ -150,12 +153,12 @@ CONFIG_SIGNED_PACKAGES=n
 CONFIG_LUCI_LANG_zh_Hans=y
 DOTCONFIG
 
-    # 将 plugins.conf 中的插件设为模块编译
+    # 显式标记 plugins.conf 中的插件，确保其优先被包含
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
         read -r name _ <<< "$line"
         [[ -z "$name" ]] && continue
-        echo "CONFIG_PACKAGE_${name}=m" >> .config
+        echo "CONFIG_PACKAGE_${name}=y" >> .config
     done < "$PLUGINS_CONF"
 
     make defconfig
@@ -164,15 +167,18 @@ DOTCONFIG
 
 # --------------------------------------------------------------------------- #
 # 执行编译（并行 → 单线程降级）
+# 使用 PIPESTATUS[0] 获取 make 的真实退出码，避免 tee 掩盖编译失败。
 # --------------------------------------------------------------------------- #
 compile_packages() {
     cd "$BUILD_DIR"
     log "开始编译 (jobs=$JOBS) ..."
-    if make package/compile -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; then
+    set +e; make package/compile -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+    if [ "$BUILD_RC" -eq 0 ]; then
         log "并行编译成功"
     else
         log "并行编译失败，降级为单线程重试..."
-        make package/compile -j1 V=s 2>&1 | tee /tmp/build.log
+        set +e; make package/compile -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+        [ "$BUILD_RC" -eq 0 ] || die "单线程编译失败，请检查 /tmp/build.log"
     fi
     log "编译完成"
 }
