@@ -158,7 +158,6 @@ jobs:
           sudo -E apt-get install -yqq jq curl libev-dev libpam0g-dev libtirpc-dev liblzma-dev libsnmp-dev libev-dev libpam0g-dev libtirpc-dev liblzma-dev libsnmp-dev perl-modules libtext-template-perl libperl-dev cpanminus perl libfile-spec-perl build-essential python3-setuptools liblua5.1-0 libtool-bin libcrypto++-dev libpcre3 libpcre3-dev libpcre3 libpcre3-dev python3-pip python3-socks python3-socks python3-unidecode 
           sudo -E systemctl daemon-reload
           sudo -E timedatectl set-timezone "Asia/Shanghai"
-          sudo ln -s /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2 || true
 
       # ── 下载并解压 SDK ────────────────────────────────────────────────────
       # 注意: OpenWrt 24.10.x SDK 使用 zstd (.tar.zst) 压缩格式
