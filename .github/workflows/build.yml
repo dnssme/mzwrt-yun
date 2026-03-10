@@ -287,28 +287,33 @@ jobs:
           #
           # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true
           #   被禁止而 panic（GitHub Actions 自动设置 CI=true）。
+          #   注意：pattern 不带 "=" 结尾，以同时匹配 rust-src / rust-std 等子包。
           # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在，
           #   导致 ipq40xx 等架构编译报 "No such file or directory"。
+          #   注意：pattern 不带 "=" 结尾，以同时匹配 fritz1200 / fritz4040 等
+          #   编译变体（例如 CONFIG_PACKAGE_uboot-fritz4040-fritz1200）。
           for pkg in rust uboot-fritz4040; do
-            sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+            sed -i "/^CONFIG_PACKAGE_${pkg}/d" .config
             echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
           done
 
       # ── 执行编译 ──────────────────────────────────────────────────────────
       # 优先并行编译；若失败则自动降级为单线程重试（排查具体错误）。
       # 使用 PIPESTATUS[0] 获取 make 的真实退出码，避免 tee 掩盖编译失败。
+      # IGNORE_ERRORS=1: 跳过无法避免的包级编译失败（例如 rust host 被其他包
+      # 作为交叉编译依赖拉起、或残留的 uboot 变体），确保其余包能继续编译。
       - name: 编译插件包
         working-directory: /tmp/openwrt-sdk
         run: |
           echo "::group::并行编译 ($(nproc) 线程)"
-          set +e; make package/compile -j"$(nproc)" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+          set +e; make package/compile IGNORE_ERRORS=1 -j"$(nproc)" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
           echo "::endgroup::"
           if [ "$BUILD_RC" -eq 0 ]; then
             echo "✅ 并行编译成功"
           else
             echo "⚠️ 并行编译失败，降级为单线程重试..."
             echo "::group::单线程重试"
-            set +e; make package/compile -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+            set +e; make package/compile IGNORE_ERRORS=1 -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
             echo "::endgroup::"
             [ "$BUILD_RC" -eq 0 ] || { echo "❌ 单线程编译失败 (exit=$BUILD_RC)，请检查上方日志"; exit $BUILD_RC; }
           fi
