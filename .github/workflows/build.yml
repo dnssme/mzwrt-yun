@@ -159,6 +159,7 @@ jobs:
           sudo -E systemctl daemon-reload
           sudo -E timedatectl set-timezone "Asia/Shanghai"
           sudo ln -s /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2
+          sudo ln -s /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/
 
       # ── 下载并解压 SDK ────────────────────────────────────────────────────
       # 注意: OpenWrt 24.10.x SDK 使用 zstd (.tar.zst) 压缩格式
