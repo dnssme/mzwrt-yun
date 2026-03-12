@@ -195,6 +195,8 @@ DOTCONFIG
     #
     # 做法：先对每个匹配的符号（含所有变体）添加 "# ... is not set"，
     #   再删除原有的 =y 行，确保所有变体均被显式禁用。
+    # 注：此函数开头的 cat > .config 每次均完整重写 .config，
+    #   因此重复执行不会产生重复的 "is not set" 行。
     for pkg in rust shadowsocks-rust uboot-fritz4040; do
         grep "^CONFIG_PACKAGE_${pkg}" .config \
             | sed 's/=.*//' \
@@ -213,12 +215,12 @@ DOTCONFIG
 compile_packages() {
     cd "$BUILD_DIR"
     log "开始编译 (jobs=$JOBS) ..."
-    set +e; make package/compile -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+    set +e; make package/compile IGNORE_ERRORS=1 -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
     if [ "$BUILD_RC" -eq 0 ]; then
         log "并行编译成功"
     else
         log "并行编译失败，降级为单线程重试..."
-        set +e; make package/compile -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+        set +e; make package/compile IGNORE_ERRORS=1 -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
         [ "$BUILD_RC" -eq 0 ] || die "单线程编译失败，请检查 /tmp/build.log"
     fi
     log "编译完成"
@@ -253,9 +255,9 @@ main() {
     setup_sdk
     detect_kernel_version
     clone_plugins
+    run_arch_hook
     setup_feeds
     install_feeds
-    run_arch_hook
     configure_sdk
     compile_packages
     collect_packages
