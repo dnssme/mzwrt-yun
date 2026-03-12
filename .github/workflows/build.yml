@@ -457,7 +457,7 @@ jobs:
             [[ -f "$f" ]] || continue
             name=$(basename "$f")
             size=$(du -sh "$f" | cut -f1)
-            PKG_LIST="${PKG_LIST}\n- \`${name}\` (${size})"
+            PKG_LIST="${PKG_LIST:+${PKG_LIST}\n}- \`${name}\` (${size})"
           done
 
           cat > /tmp/release_notes.md <<EOF

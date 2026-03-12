@@ -25,7 +25,7 @@ SDK_URL="${SDK_URL:-}"                  # OpenWrt SDK 下载地址（必须）
 TARGET_ARCH="${TARGET_ARCH:-x86_64}"   # 目标架构
 BUILD_DIR="${BUILD_DIR:-/tmp/openwrt-sdk}"
 OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/output}"
-PLUGINS_CONF="${PLUGINS_CONF:-$(dirname "$0")/../plugins.conf}"
+PLUGINS_CONF="${PLUGINS_CONF:-$(cd "$(dirname "$0")/.." && pwd)/plugins.conf}"
 JOBS="${JOBS:-$(nproc)}"
 
 # --------------------------------------------------------------------------- #
