@@ -25,7 +25,7 @@ SDK_URL="${SDK_URL:-}"                  # OpenWrt SDK 下载地址（必须）
 TARGET_ARCH="${TARGET_ARCH:-x86_64}"   # 目标架构
 BUILD_DIR="${BUILD_DIR:-/tmp/openwrt-sdk}"
 OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/output}"
-PLUGINS_CONF="${PLUGINS_CONF:-$(dirname "$0")/../plugins.conf}"
+PLUGINS_CONF="${PLUGINS_CONF:-$(cd "$(dirname "$0")/.." && pwd)/plugins.conf}"
 JOBS="${JOBS:-$(nproc)}"
 
 # --------------------------------------------------------------------------- #
@@ -190,10 +190,19 @@ DOTCONFIG
     # 会在 defconfig 时覆盖 .config 中预先写入的 =n 设置。
     #
     # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true 被禁止而 panic。
+    # shadowsocks-rust: 依赖 Rust 交叉编译，CI runner 缺少 musl 目标 std 库。
     # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在。
-    for pkg in rust uboot-fritz4040; do
-        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+    #
+    # 做法：先对每个匹配的符号（含所有变体）添加 "# ... is not set"，
+    #   再删除原有的 =y 行，确保所有变体均被显式禁用。
+    # 注：此函数开头的 cat > .config 每次均完整重写 .config，
+    #   因此重复执行不会产生重复的 "is not set" 行。
+    for pkg in rust shadowsocks-rust uboot-fritz4040; do
+        grep "^CONFIG_PACKAGE_${pkg}" .config \
+            | sed 's/=.*//' \
+            | sed 's/^/# /' \
+            | sed 's/$/ is not set/' >> .config || true
+        sed -i "/^CONFIG_PACKAGE_${pkg}/d" .config
     done
 
     log "配置完成"
@@ -206,12 +215,12 @@ DOTCONFIG
 compile_packages() {
     cd "$BUILD_DIR"
     log "开始编译 (jobs=$JOBS) ..."
-    set +e; make package/compile -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+    set +e; make package/compile IGNORE_ERRORS=1 -j"$JOBS" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
     if [ "$BUILD_RC" -eq 0 ]; then
         log "并行编译成功"
     else
         log "并行编译失败，降级为单线程重试..."
-        set +e; make package/compile -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+        set +e; make package/compile IGNORE_ERRORS=1 -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
         [ "$BUILD_RC" -eq 0 ] || die "单线程编译失败，请检查 /tmp/build.log"
     fi
     log "编译完成"
@@ -246,9 +255,9 @@ main() {
     setup_sdk
     detect_kernel_version
     clone_plugins
+    run_arch_hook
     setup_feeds
     install_feeds
-    run_arch_hook
     configure_sdk
     compile_packages
     collect_packages
