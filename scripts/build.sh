@@ -190,10 +190,17 @@ DOTCONFIG
     # 会在 defconfig 时覆盖 .config 中预先写入的 =n 设置。
     #
     # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true 被禁止而 panic。
+    # shadowsocks-rust: 依赖 Rust 交叉编译，CI runner 缺少 musl 目标 std 库。
     # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在。
-    for pkg in rust uboot-fritz4040; do
-        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+    #
+    # 做法：先对每个匹配的符号（含所有变体）添加 "# ... is not set"，
+    #   再删除原有的 =y 行，确保所有变体均被显式禁用。
+    for pkg in rust shadowsocks-rust uboot-fritz4040; do
+        grep "^CONFIG_PACKAGE_${pkg}" .config \
+            | sed 's/=.*//' \
+            | sed 's/^/# /' \
+            | sed 's/$/ is not set/' >> .config || true
+        sed -i "/^CONFIG_PACKAGE_${pkg}/d" .config
     done
 
     log "配置完成"
