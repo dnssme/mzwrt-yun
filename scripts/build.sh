@@ -183,6 +183,9 @@ DOTCONFIG
         echo "CONFIG_PACKAGE_${name}=y" >> .config
     done < "$PLUGINS_CONF"
 
+    # 物理移除已知在 SDK 环境中无法编译的包源码
+    rm -rf feeds/base/package/boot/uboot-fritz4040 2>/dev/null || true
+
     make defconfig
 
     # ⚠️ 在 defconfig 之后禁用已知会导致编译失败的包。

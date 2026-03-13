@@ -171,7 +171,7 @@ jobs:
             libfile-spec-perl cpanminus pkgconf python3 python3-netifaces \
             python3-pip python3-pyelftools python3-setuptools python3-socks \
             python3-unidecode qemu-utils rsync rustc cargo scons squashfs-tools \
-            subversion swig texinfo uglifyjs upx-ucl unzip lib32z1 libc6-dev-i386 build-essential
+            subversion swig texinfo uglifyjs upx-ucl unzip lib32z1
           sudo -E systemctl daemon-reload
           sudo -E timedatectl set-timezone "Asia/Shanghai"
 
@@ -338,6 +338,11 @@ jobs:
             echo "CONFIG_PACKAGE_${name}=y"
           done < "$GITHUB_WORKSPACE/plugins.conf" >> .config
 
+          # 物理移除已知在 SDK 环境中无法编译的包源码。
+          # uboot-fritz4040 在 ipq40xx SDK 中可能被目标配置强制选中，
+          # 仅通过 .config 无法可靠禁用，因此在 defconfig 前移除源码。
+          rm -rf feeds/base/package/boot/uboot-fritz4040 2>/dev/null || true
+
           make defconfig
 
           # ⚠️ 在 defconfig 之后禁用已知在 CI 环境中会编译失败的包。
@@ -346,18 +351,17 @@ jobs:
           #
           # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true
           #   被禁止而 panic（GitHub Actions 自动设置 CI=true）。
+          #   注意：SDK 从源码构建自己的 Rust 工具链，不使用系统 Rust，
+          #   因此通过 rustup 安装 musl target 无法解决此问题。
+          # shadowsocks-rust: 依赖 Rust 交叉编译（HOST_BUILD_DEPENDS:=rust/host），
+          #   会触发 SDK 的 Rust 从源码编译，导致上述 CI 环境 panic。
           # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在，
           #   导致 ipq40xx 等架构编译报 "No such file or directory"。
-          #
-          # 注意: shadowsocks-rust 已从禁用列表移除。
-          #   其所需的 Rust musl target 已在前置步骤中通过 rustup 安装。
-          #   若目标架构（如 mips/mipsel）的 Rust target 安装失败，
-          #   编译阶段将通过 IGNORE_ERRORS=m 自动跳过该包。
           #
           # 做法：先对每个匹配的符号（含所有变体）添加 "# ... is not set"，
           #   再删除原有的 =y 行，确保所有变体（如 uboot-fritz4040-fritz1200）
           #   均被显式禁用，避免 kconfig 默认值重新启用它们。
-          for pkg in rust uboot-fritz4040; do
+          for pkg in rust shadowsocks-rust uboot-fritz4040; do
             grep "^CONFIG_PACKAGE_${pkg}" .config \
               | sed 's/=.*//' \
               | sed 's/^/# /' \
