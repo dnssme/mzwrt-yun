@@ -121,25 +121,107 @@ setup_feeds() {
 
 # --------------------------------------------------------------------------- #
 # 拉取插件源码
+# 支持两种格式:
+#   1. 标准格式: <名称> <Git地址> [分支]
+#      — 克隆单个插件仓库到 /tmp/custom_packages/<名称>
+#   2. 集合格式: repo:<名称> <Git地址> [分支] [include=包1,包2,...] [exclude=包3,...]
+#      — 克隆整个集合仓库，自动将所有含 Makefile 的子目录以符号链接形式
+#        导入 /tmp/custom_packages，可通过 include/exclude 过滤包名
 # --------------------------------------------------------------------------- #
 clone_plugins() {
     local custom_pkg_dir="/tmp/custom_packages"
-    mkdir -p "$custom_pkg_dir"
+    local repos_dir="/tmp/plugin_repos"
+    mkdir -p "$custom_pkg_dir" "$repos_dir"
 
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
 
-        read -r name url branch <<< "$line"
-        [[ -z "$name" || -z "$url" ]] && continue
-        branch="${branch:-main}"
+        if [[ "$line" =~ ^repo: ]]; then
+            # ── 集合仓库格式 ────────────────────────────────────────────────
+            # 解析: repo:<名称> <Git地址> [分支] [include=...] [exclude=...]
+            local rest="${line#repo:}"
+            local -a tokens
+            read -ra tokens <<< "$rest"
+            local name="${tokens[0]:-}" url="${tokens[1]:-}"
+            [[ -z "$name" || -z "$url" ]] && continue
 
-        log "克隆插件: $name  ($url@$branch)"
-        local dest="$custom_pkg_dir/$name"
-        if [[ -d "$dest" ]]; then
-            git -C "$dest" pull --ff-only
+            # 提取可选的分支与过滤参数（tokens[2] 起）
+            local branch="" include_list="" exclude_list=""
+            local i
+            for (( i=2; i<${#tokens[@]}; i++ )); do
+                local token="${tokens[$i]}"
+                case "$token" in
+                    include=*) include_list="${token#include=}" ;;
+                    exclude=*) exclude_list="${token#exclude=}" ;;
+                    *)  [[ -z "$branch" ]] && branch="$token" ;;
+                esac
+            done
+            branch="${branch:-main}"
+
+            log "克隆插件集合: $name  ($url@$branch)"
+            local dest="$repos_dir/$name"
+            if [[ -d "$dest" ]]; then
+                git -C "$dest" pull --ff-only
+            else
+                git clone --depth=1 --branch "$branch" "$url" "$dest" 2>/dev/null \
+                    || git clone --depth=1 "$url" "$dest"
+            fi
+
+            # 扫描集合仓库中所有含 OpenWrt Makefile 的子目录，作为独立包导入
+            local pkg_count=0
+            while IFS= read -r pkg_dir; do
+                local pkg_name
+                pkg_name=$(basename "$pkg_dir")
+
+                # include 过滤：若指定了列表，只导入列表内的包
+                if [[ -n "$include_list" ]]; then
+                    local in_list=0
+                    local inc
+                    IFS=',' read -ra inc_arr <<< "$include_list"
+                    for inc in "${inc_arr[@]}"; do
+                        [[ "$pkg_name" == "$inc" ]] && { in_list=1; break; }
+                    done
+                    [[ "$in_list" -eq 0 ]] && continue
+                fi
+
+                # exclude 过滤：跳过排除列表中的包
+                if [[ -n "$exclude_list" ]]; then
+                    local excluded=0
+                    local exc
+                    IFS=',' read -ra exc_arr <<< "$exclude_list"
+                    for exc in "${exc_arr[@]}"; do
+                        [[ "$pkg_name" == "$exc" ]] && { excluded=1; break; }
+                    done
+                    [[ "$excluded" -eq 1 ]] && continue
+                fi
+
+                # 创建符号链接（若名称已存在则跳过，避免覆盖单体插件）
+                if [[ ! -e "$custom_pkg_dir/$pkg_name" ]]; then
+                    ln -sf "$pkg_dir" "$custom_pkg_dir/$pkg_name"
+                    pkg_count=$((pkg_count + 1))
+                fi
+            done < <(find "$dest" -maxdepth 2 -name "Makefile" \
+                         ! -path "$dest/Makefile" \
+                         -exec grep -ql 'call BuildPackage\|call KernelPackage' {} \; -print \
+                         | xargs -I{} dirname {} \
+                         | sort -u)
+
+            log "集合 $name: 已导入 $pkg_count 个包"
         else
-            git clone --depth=1 --branch "$branch" "$url" "$dest" 2>/dev/null \
-                || git clone --depth=1 "$url" "$dest"
+            # ── 标准单体插件格式 ────────────────────────────────────────────
+            local name url branch
+            read -r name url branch <<< "$line"
+            [[ -z "$name" || -z "$url" ]] && continue
+            branch="${branch:-main}"
+
+            log "克隆插件: $name  ($url@$branch)"
+            local dest="$custom_pkg_dir/$name"
+            if [[ -d "$dest" ]]; then
+                git -C "$dest" pull --ff-only
+            else
+                git clone --depth=1 --branch "$branch" "$url" "$dest" 2>/dev/null \
+                    || git clone --depth=1 "$url" "$dest"
+            fi
         fi
     done < "$PLUGINS_CONF"
 
@@ -175,9 +257,11 @@ CONFIG_SIGNED_PACKAGES=n
 CONFIG_LUCI_LANG_zh_Hans=y
 DOTCONFIG
 
-    # 显式标记 plugins.conf 中的插件，确保其优先被包含
+    # 显式标记 plugins.conf 中的单体插件，确保其优先被包含
+    # repo: 集合仓库行跳过（其包已通过 CONFIG_ALL_NONSHARED=y 全量覆盖）
     while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" =~ ^repo: ]] && continue
         read -r name _ <<< "$line"
         [[ -z "$name" ]] && continue
         echo "CONFIG_PACKAGE_${name}=y" >> .config

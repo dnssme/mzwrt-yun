@@ -210,34 +210,108 @@ jobs:
           echo "   可在路由器上执行: opkg info kernel 来确认固件内核版本"
 
       # ── 克隆插件源码 ──────────────────────────────────────────────────────
+      # 支持两种格式（详见 plugins.conf 注释）:
+      #   1. 标准格式: <名称> <Git地址> [分支]
+      #   2. 集合格式: repo:<名称> <Git地址> [分支] [include=包1,包2] [exclude=包3]
       - name: 克隆插件源码
         id: clone_plugins
         run: |
-          mkdir -p /tmp/custom_packages
+          mkdir -p /tmp/custom_packages /tmp/plugin_repos
           failed=0
           total=0
 
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-            read -r name url branch <<< "$line"
-            [[ -z "$name" || -z "$url" ]] && continue
-            branch="${branch:-main}"
-            total=$((total+1))
 
-            echo "::group::克隆 $name"
-            if git clone --depth=1 --branch "$branch" "$url" "/tmp/custom_packages/$name" 2>/dev/null \
-               || git clone --depth=1 "$url" "/tmp/custom_packages/$name"; then
-              echo "✅ $name 克隆成功"
+            if [[ "$line" =~ ^repo: ]]; then
+              # ── 集合仓库格式 ──────────────────────────────────────────────
+              rest="${line#repo:}"
+              read -ra tokens <<< "$rest"
+              name="${tokens[0]:-}"
+              url="${tokens[1]:-}"
+              [[ -z "$name" || -z "$url" ]] && continue
+
+              branch="" include_list="" exclude_list=""
+              for (( idx=2; idx<${#tokens[@]}; idx++ )); do
+                token="${tokens[$idx]}"
+                case "$token" in
+                  include=*) include_list="${token#include=}" ;;
+                  exclude=*) exclude_list="${token#exclude=}" ;;
+                  *)  [[ -z "$branch" ]] && branch="$token" ;;
+                esac
+              done
+              branch="${branch:-main}"
+              total=$((total + 1))
+
+              echo "::group::克隆集合 $name"
+              dest="/tmp/plugin_repos/$name"
+              if git clone --depth=1 --branch "$branch" "$url" "$dest" 2>/dev/null \
+                 || git clone --depth=1 "$url" "$dest"; then
+                echo "✅ 集合 $name 克隆成功"
+
+                # 扫描并以符号链接形式导入所有有效的 OpenWrt 包子目录
+                pkg_count=0
+                while IFS= read -r pkg_dir; do
+                  pkg_name=$(basename "$pkg_dir")
+
+                  # include 过滤
+                  if [[ -n "$include_list" ]]; then
+                    in_list=0
+                    IFS=',' read -ra inc_arr <<< "$include_list"
+                    for inc in "${inc_arr[@]}"; do
+                      [[ "$pkg_name" == "$inc" ]] && { in_list=1; break; }
+                    done
+                    [[ "$in_list" -eq 0 ]] && continue
+                  fi
+
+                  # exclude 过滤
+                  if [[ -n "$exclude_list" ]]; then
+                    excluded=0
+                    IFS=',' read -ra exc_arr <<< "$exclude_list"
+                    for exc in "${exc_arr[@]}"; do
+                      [[ "$pkg_name" == "$exc" ]] && { excluded=1; break; }
+                    done
+                    [[ "$excluded" -eq 1 ]] && continue
+                  fi
+
+                  if [[ ! -e "/tmp/custom_packages/$pkg_name" ]]; then
+                    ln -sf "$pkg_dir" "/tmp/custom_packages/$pkg_name"
+                    pkg_count=$((pkg_count + 1))
+                  fi
+                done < <(find "$dest" -maxdepth 2 -name "Makefile" \
+                             ! -path "$dest/Makefile" \
+                             -exec grep -ql 'call BuildPackage\|call KernelPackage' {} \; -print \
+                             | xargs -I{} dirname {} \
+                             | sort -u)
+
+                echo "  → 已导入 $pkg_count 个包"
+              else
+                echo "⚠️ $name 集合克隆失败（已跳过）"
+                failed=$((failed + 1))
+              fi
+              echo "::endgroup::"
             else
-              echo "⚠️ $name 克隆失败（已跳过）"
-              failed=$((failed+1))
+              # ── 标准单体插件格式 ───────────────────────────────────────────
+              read -r name url branch <<< "$line"
+              [[ -z "$name" || -z "$url" ]] && continue
+              branch="${branch:-main}"
+              total=$((total + 1))
+
+              echo "::group::克隆 $name"
+              if git clone --depth=1 --branch "$branch" "$url" "/tmp/custom_packages/$name" 2>/dev/null \
+                 || git clone --depth=1 "$url" "/tmp/custom_packages/$name"; then
+                echo "✅ $name 克隆成功"
+              else
+                echo "⚠️ $name 克隆失败（已跳过）"
+                failed=$((failed + 1))
+              fi
+              echo "::endgroup::"
             fi
-            echo "::endgroup::"
           done < plugins.conf
 
           echo "clone_total=$total" >> "$GITHUB_OUTPUT"
           echo "clone_failed=$failed" >> "$GITHUB_OUTPUT"
-          echo "共克隆 $total 个插件，失败 $failed 个"
+          echo "共处理 $total 个插件条目，失败 $failed 个"
 
       # ── 执行架构自定义 hook 脚本 ─────────────────────────────────────────
       # 若 scripts/hooks/<arch>.sh 存在，则在此执行。
@@ -330,9 +404,11 @@ jobs:
           CONFIG_LUCI_LANG_zh_Hans=y
           DOTCONFIG
 
-          # 显式标记 plugins.conf 中的插件，确保其优先被包含
+          # 显式标记 plugins.conf 中的单体插件，确保其优先被包含
+          # repo: 集合仓库行跳过（其包已通过 CONFIG_ALL_NONSHARED=y 全量覆盖）
           while IFS= read -r line; do
             [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ "$line" =~ ^repo: ]] && continue
             read -r name _ <<< "$line"
             [[ -z "$name" ]] && continue
             echo "CONFIG_PACKAGE_${name}=y"

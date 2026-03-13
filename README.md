@@ -47,13 +47,36 @@ mzwrt-yun/
 
 ### 1. 添加插件
 
-编辑 [`plugins.conf`](./plugins.conf)，每行一个插件：
+编辑 [`plugins.conf`](./plugins.conf)，支持两种格式：
+
+**【标准格式】单体插件仓库（一行对应一个插件仓库）**
 
 ```
 # 格式: <插件名> <Git仓库地址> [分支]
 luci-app-openclash   https://github.com/vernesong/OpenClash   master
 luci-app-passwall    https://github.com/xiaorouji/openwrt-passwall  main
 ```
+
+**【集合格式】插件集合仓库（一个仓库内含多个插件子目录）**
+
+```
+# 格式: repo:<仓库名> <Git仓库地址> [分支] [include=包1,包2,...] [exclude=包3,...]
+
+# 导入整个集合的所有插件:
+repo:small-package  https://github.com/kenzok8/small-package  main
+
+# 只导入集合中指定的插件（逗号分隔，无空格）:
+repo:lienol-pkg     https://github.com/Lienol/openwrt-package  main  include=luci-app-ssr-musl-full,luci-theme-argon
+
+# 导入集合并排除特定包（如避免 Rust 编译问题）:
+repo:kiddin9-pkgs   https://github.com/kiddin9/openwrt-packages  main  exclude=shadowsocks-rust,naiveproxy
+```
+
+集合格式说明：
+- 自动扫描仓库中所有含 `Makefile` 的子目录，识别有效的 OpenWrt 包并以符号链接导入
+- `include=` 只导入指定包（留空则导入全部）
+- `exclude=` 跳过指定包（常用于排除会导致 CI 失败的 Rust 相关包）
+- 包名冲突时，已存在的单体插件优先，集合中的同名包会被跳过
 
 提交后，GitHub Actions 会自动触发所有架构的编译。
 
