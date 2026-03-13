@@ -259,6 +259,46 @@ jobs:
             echo "未找到自定义脚本 scripts/hooks/${{ matrix.name }}.sh，跳过"
           fi
 
+      # ── 安装 Rust 交叉编译目标 ────────────────────────────────────────────
+      # shadowsocks-rust 等包需要对应架构的 musl target。
+      # GitHub Actions runner 默认仅含 x86_64-unknown-linux-gnu，
+      # 必须显式安装目标架构的 musl target，否则 cargo 交叉编译时
+      # 会报 "can't find crate for `core`" 错误。
+      #
+      # 注意: mips/mipsel musl target 在 rustup 中为 Tier 2，
+      # 若下载失败则跳过（该架构的 Rust 包将在编译时通过 IGNORE_ERRORS=m 跳过）。
+      - name: 安装 Rust 交叉编译目标
+        run: |
+          declare -A RUST_TARGET_MAP=(
+            ["x86_64"]="x86_64-unknown-linux-musl"
+            ["aarch64_generic"]="aarch64-unknown-linux-musl"
+            ["aarch64_cortex-a53"]="aarch64-unknown-linux-musl"
+            ["aarch64_cortex-a72"]="aarch64-unknown-linux-musl"
+            ["arm_cortex-a7_neon-vfpv4"]="armv7-unknown-linux-musleabihf"
+            ["arm_cortex-a9_vfpv3-d16"]="armv7-unknown-linux-musleabihf"
+            ["arm_cortex-a15_neon-vfpv4"]="armv7-unknown-linux-musleabihf"
+            ["mips_24kc"]="mips-unknown-linux-musl"
+            ["mipsel_24kc"]="mipsel-unknown-linux-musl"
+            ["mipsel_74kc"]="mipsel-unknown-linux-musl"
+            ["mipsel_mips32"]="mipsel-unknown-linux-musl"
+          )
+
+          ARCH="${{ matrix.name }}"
+          RUST_TARGET="${RUST_TARGET_MAP[$ARCH]}"
+
+          if [[ -z "$RUST_TARGET" ]]; then
+            echo "⚠️ 未找到架构 $ARCH 对应的 Rust target，跳过"
+            exit 0
+          fi
+
+          echo "架构: $ARCH → Rust target: $RUST_TARGET"
+          if rustup target add "$RUST_TARGET"; then
+            echo "✅ Rust target 安装完成: $RUST_TARGET"
+          else
+            echo "⚠️ Rust target $RUST_TARGET 安装失败（Tier 2 target 可能无预编译包）"
+            echo "   该架构的 Rust 相关包将在编译时自动跳过"
+          fi
+
       # ── 配置 feeds ────────────────────────────────────────────────────────
       # 将自定义插件目录作为额外 feed 追加到 SDK 默认配置后
       - name: 配置 feeds
@@ -306,15 +346,18 @@ jobs:
           #
           # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true
           #   被禁止而 panic（GitHub Actions 自动设置 CI=true）。
-          # shadowsocks-rust: 依赖 Rust 交叉编译，CI runner 缺少 musl 目标的
-          #   std 库（error[E0463]: can't find crate for 'std'），所有架构均失败。
           # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在，
           #   导致 ipq40xx 等架构编译报 "No such file or directory"。
+          #
+          # 注意: shadowsocks-rust 已从禁用列表移除。
+          #   其所需的 Rust musl target 已在前置步骤中通过 rustup 安装。
+          #   若目标架构（如 mips/mipsel）的 Rust target 安装失败，
+          #   编译阶段将通过 IGNORE_ERRORS=m 自动跳过该包。
           #
           # 做法：先对每个匹配的符号（含所有变体）添加 "# ... is not set"，
           #   再删除原有的 =y 行，确保所有变体（如 uboot-fritz4040-fritz1200）
           #   均被显式禁用，避免 kconfig 默认值重新启用它们。
-          for pkg in rust shadowsocks-rust uboot-fritz4040; do
+          for pkg in rust uboot-fritz4040; do
             grep "^CONFIG_PACKAGE_${pkg}" .config \
               | sed 's/=.*//' \
               | sed 's/^/# /' \
@@ -325,20 +368,20 @@ jobs:
       # ── 执行编译 ──────────────────────────────────────────────────────────
       # 优先并行编译；若失败则自动降级为单线程重试（排查具体错误）。
       # 使用 PIPESTATUS[0] 获取 make 的真实退出码，避免 tee 掩盖编译失败。
-      # IGNORE_ERRORS=1: 跳过无法避免的包级编译失败（例如 rust host 被其他包
-      # 作为交叉编译依赖拉起、或残留的 uboot 变体），确保其余包能继续编译。
+      # IGNORE_ERRORS=m: 跳过单个包级编译失败，确保其余包能继续编译。
+      #   （注意: =1 无法阻止包编译错误向上传播，必须使用 =m）
       - name: 编译插件包
         working-directory: /tmp/openwrt-sdk
         run: |
           echo "::group::并行编译 ($(nproc) 线程)"
-          set +e; make package/compile IGNORE_ERRORS=1 -j"$(nproc)" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+          set +e; make package/compile IGNORE_ERRORS=m -j"$(nproc)" V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
           echo "::endgroup::"
           if [ "$BUILD_RC" -eq 0 ]; then
             echo "✅ 并行编译成功"
           else
             echo "⚠️ 并行编译失败，降级为单线程重试..."
             echo "::group::单线程重试"
-            set +e; make package/compile IGNORE_ERRORS=1 -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
+            set +e; make package/compile IGNORE_ERRORS=m -j1 V=s 2>&1 | tee /tmp/build.log; BUILD_RC=${PIPESTATUS[0]}; set -e
             echo "::endgroup::"
             [ "$BUILD_RC" -eq 0 ] || { echo "❌ 单线程编译失败 (exit=$BUILD_RC)，请检查上方日志"; exit $BUILD_RC; }
           fi
@@ -545,4 +588,3 @@ jobs:
             /tmp/artifacts/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
