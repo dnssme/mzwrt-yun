@@ -338,29 +338,44 @@ jobs:
             echo "CONFIG_PACKAGE_${name}=y"
           done < "$GITHUB_WORKSPACE/plugins.conf" >> .config
 
-          # 物理移除已知在 SDK 环境中无法编译的包源码。
-          # uboot-fritz4040 在 ipq40xx SDK 中可能被目标配置强制选中，
-          # 仅通过 .config 无法可靠禁用，因此在 defconfig 前移除源码。
+          # 物理移除已知在 SDK 环境中无法编译的包。
+          # 必须在 make defconfig 之前完成，以确保 kconfig 完全不知道这些包，
+          # 从而避免它们出现在编译队列中。
+          #
+          # 移除逻辑（操作 package/feeds/ 下的已安装 feed 符号链接，而非 feeds/ 原始目录）：
+          #
+          # ① rust: rust 1.89.0 的 bootstrap 在 CI=true 环境下会因
+          #   llvm.download-ci-llvm=true 而 panic。IGNORE_ERRORS=m 无法捕获
+          #   HOST 包编译失败（HOST 错误会直接传播到顶层 make 导致整体失败）。
+          #   因此必须在 defconfig 前物理移除，确保 rust/host 目标从不存在。
+          #
+          # ② rust HOST 依赖包（如 shadowsocks-rust）：拥有 HOST_BUILD_DEPENDS:=rust/host
+          #   的包会触发 rust HOST 编译，即使 CONFIG_PACKAGE_rust=n 也无法阻止。
+          #   通过搜索所有 feed 的 Makefile，自动找出并移除此类包。
+          #
+          # ③ uboot-fritz4040: 捆绑了 x86 ELF 解释器，在非 x86 SDK 中不存在，
+          #   导致 ipq40xx 等架构编译报 "No such file or directory"。
+          #   移除其 feeds/ 原始目录（feeds/base 为 SDK 基础 feed 的符号树）。
+          echo "::group::移除 CI 环境中无法编译的包"
+          # ① rust 包本体（package/feeds/packages/rust 是 feeds install 创建的符号链接）
+          rm -rf package/feeds/packages/rust 2>/dev/null || true
+          # ② 搜索所有 feed 中依赖 rust/host 的包并移除
+          # 使用进程替换避免 grep 无匹配时 set -e 导致脚本中止
+          while IFS= read -r makefile; do
+            echo "  移除 rust HOST 依赖包: $(dirname "$makefile")"
+            rm -rf "$(dirname "$makefile")"
+          done < <(grep -rl 'HOST_BUILD_DEPENDS.*rust' package/feeds/ --include='Makefile' 2>/dev/null || true)
+          # ③ uboot-fritz4040（移除原始 feed 目录；defconfig 前执行使 kconfig 感知不到）
           rm -rf feeds/base/package/boot/uboot-fritz4040 2>/dev/null || true
+          echo "::endgroup::"
 
           make defconfig
 
-          # ⚠️ 在 defconfig 之后禁用已知在 CI 环境中会编译失败的包。
-          # 必须在 make defconfig 之后操作，因为 CONFIG_ALL_NONSHARED=y
-          # 会在 defconfig 时覆盖 .config 中预先写入的 =n 设置。
-          #
-          # rust 1.89.0: bootstrap 在 CI 中因 llvm.download-ci-llvm=true
-          #   被禁止而 panic（GitHub Actions 自动设置 CI=true）。
-          #   注意：SDK 从源码构建自己的 Rust 工具链，不使用系统 Rust，
-          #   因此通过 rustup 安装 musl target 无法解决此问题。
-          # shadowsocks-rust: 依赖 Rust 交叉编译（HOST_BUILD_DEPENDS:=rust/host），
-          #   会触发 SDK 的 Rust 从源码编译，导致上述 CI 环境 panic。
-          # uboot-fritz4040: 捆绑的 x86 ELF 解释器在 SDK staging 目录中不存在，
-          #   导致 ipq40xx 等架构编译报 "No such file or directory"。
-          #
-          # 做法：先对每个匹配的符号（含所有变体）添加 "# ... is not set"，
-          #   再删除原有的 =y 行，确保所有变体（如 uboot-fritz4040-fritz1200）
-          #   均被显式禁用，避免 kconfig 默认值重新启用它们。
+          # ⚠️ defconfig 之后的补充禁用（belt-and-suspenders）。
+          # 上方已在 defconfig 前物理移除了 rust 及其 HOST 依赖包，
+          # 此处作为额外保险：若任何 rust 相关符号仍出现在 .config 中，
+          # 通过追加 "# ... is not set" 并删除 =y 行确保其被禁用。
+          # uboot-fritz4040 同理（含所有子变体如 uboot-fritz4040-fritz1200）。
           for pkg in rust shadowsocks-rust uboot-fritz4040; do
             grep "^CONFIG_PACKAGE_${pkg}" .config \
               | sed 's/=.*//' \
